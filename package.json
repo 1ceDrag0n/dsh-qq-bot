@@ -1,0 +1,51 @@
+{
+  "name": "@local/dsh-qq-bot",
+  "version": "1.0.0",
+  "description": "QQ chat bridge for DeepSeek Harness: OneBot v11, persona boards, long-term memory, tools and a live settings page.",
+  "license": "MIT",
+  "author": "dsh-qq-bot contributors",
+  "type": "module",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "qq",
+    "onebot",
+    "napcat",
+    "lagrange",
+    "chatbot",
+    "cordis"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "settings.example.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  }
+}

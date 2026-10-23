@@ -1,0 +1,32 @@
+# Runtime data
+/settings.json
+/state.json
+/vision-cache/
+/diary/
+/stickers/
+*.log
+
+# Local configuration and secrets
+.env
+.env.*
+*.token
+*.secret
+
+# Dependencies and build output
+node_modules/
+.pnpm-store/
+coverage/
+dist/
+build/
+
+# Local test artifacts
+/qq-bot-test/
+/test-*/
+*tmp*
+*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

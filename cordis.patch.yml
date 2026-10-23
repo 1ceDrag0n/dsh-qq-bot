@@ -1,0 +1,43 @@
+# QQ bridge bundle: mount the Host half, and declare a dedicated agent preset
+# that gives the QQ bot web access plus read-only file tools — no shell, no
+# writes, no subagents, no workflows.
+- insert:
+    - id: qq-bot
+      name: '@local/dsh-qq-bot'
+
+    - id: preset-qq-bot
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: qq-bot
+        name: QQ 聊天
+        description: QQ 聊天专用：联网搜索、网页读取与只读文件工具；没有 shell、写入、子代理或工作流。
+        order: 90
+        plugins:
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+            config:
+              read: true
+              readImage: true
+              write: false
+              edit: false
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'

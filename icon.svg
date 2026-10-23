@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="QQ chat bridge">
+  <defs>
+    <linearGradient id="bg" x1="32" y1="24" x2="224" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2F7CF6"/>
+      <stop offset="0.55" stop-color="#18A8E8"/>
+      <stop offset="1" stop-color="#12C6B0"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="72" y1="76" x2="184" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E8F7FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <path d="M66 84c0-14.4 11.6-26 26-26h72c14.4 0 26 11.6 26 26v58c0 14.4-11.6 26-26 26H122l-34 26c-3.9 3-9.5.2-9.5-4.7V168C72.5 165.4 66 157.1 66 148V84z" fill="url(#bubble)"/>
+  <circle cx="106" cy="113" r="9" fill="#1C9BE0"/>
+  <circle cx="128" cy="113" r="9" fill="#1C9BE0"/>
+  <circle cx="150" cy="113" r="9" fill="#1C9BE0"/>
+  <path d="M104 152c8 6 17 9 27 9s19-3 27-9" fill="none" stroke="#1C9BE0" stroke-width="7" stroke-linecap="round" opacity="0.55"/>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="round" opacity="0.85">
+    <path d="M196 58a38 38 0 0 1 0 48" stroke-width="6"/>
+    <path d="M208 46a55 55 0 0 1 0 72" stroke-width="5" opacity="0.55"/>
+  </g>
+</svg>
