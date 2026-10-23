@@ -1,10 +1,42 @@
 # dsh-qq-bot
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![OneBot v11](https://img.shields.io/badge/OneBot-v11-2496ED.svg)](https://github.com/botuniverse/onebot-11)
+![DeepSeek Harness](https://img.shields.io/badge/DeepSeek-Harness-4F46E5.svg)
+
+> 给 DeepSeek Harness 接上 QQ：一个有长期记忆、有人设、能联网、能看图、能自己管理表情包的 DSH agent。
+
 把 **DeepSeek Harness** 的智能体接入 QQ 的插件。
 
 通过 OneBot v11 连接 NapCat / Lagrange / LLOneBot，把 QQ 私聊和群聊消息交给一个真正的 DSH agent 处理，再把回复发回 QQ。插件同时负责长期记忆、人设、表情包、日记、群管理和设置页面。
 
 > 这是一个社区插件，不是 QQ 官方客户端。QQ 登录由 NapCat / Lagrange 等 OneBot 实现完成，本插件只负责 OneBot 消息收发。
+
+## 它和普通 QQ 机器人有什么不同
+
+- **不是关键词回复器**：每条消息交给一个真正的 DSH agent，能调用联网搜索、网页读取、图片解析和只读文件工具
+- **不是一个大杂烩**：私聊和群聊各自拥有独立 agent、独立模型和独立上下文，互不串线
+- **不是金鱼记忆**：按 QQ 号识别联系人，长期记忆、摘要压缩、对每个人的印象和关系都会持续累积
+- **不是固定角色**：多套人设板独立保存，各自拥有独立记忆空间、自我认知和聊天上下文
+- **不是裸奔**：agent 只拿只读和联网工具，shell、写入、编辑、子代理、workflow 都不开放
+
+## 适合谁
+
+- 想让 QQ 里出现一个真正有记忆、有性格的 AI 角色
+- 已经有 NapCat / Lagrange / LLOneBot，想直接接 DSH
+- 想分别给私聊和群聊配不同模型、不同人设、不同上下文
+- 想自己改人设、记忆、表情包、日记和群管理策略
+
+## 快速开始
+
+```text
+1. 安装 NapCat / Lagrange / LLOneBot，登录 QQ
+2. 开启 OneBot v11 正向 WebSocket（默认 ws://127.0.0.1:3001）
+3. 在 DSH 中安装本仓库，打开 设置 → QQ 聊天
+4. 填人设、选模型、点保存，然后给机器人发一条私聊
+```
+
+详细安装见下文，或直接看 [Releases](https://github.com/1ceDrag0n/dsh-qq-bot/releases)。
 
 ## 功能
 
@@ -22,6 +54,17 @@
 - **主动发言**：群聊和私聊都可主动开口；私聊只发给白名单联系人
 - **连续会话**：一个私聊/群聊通道对应一个长期 agent，按轮次自动重建，避免上下文无限增长
 - **设置页面**：DSH Web GUI 内的一级设置页，实时状态、模型选择、人设、记忆、表情包、日记、连接参数
+
+## English overview
+
+**dsh-qq-bot** connects a DeepSeek Harness agent to QQ through OneBot v11
+(NapCat / Lagrange / LLOneBot).
+
+It is not a keyword bot. Every QQ message is handled by a real DSH agent with
+web search, web fetch, image understanding and read-only file tools. Private
+and group chats run separate agents with independent model choices, context,
+long-term memory and persona boards. The agent is restricted to read-only and
+web tools; shell, file writes, subagents and workflows are not exposed.
 
 ## 架构
 
