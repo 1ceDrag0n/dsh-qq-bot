@@ -51,6 +51,16 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function fmtRequestAge(receivedAt) {
+      if (!receivedAt) return '';
+      const minutes = Math.floor((Date.now() - receivedAt) / 60000);
+      if (!Number.isFinite(minutes) || minutes < 1) return '';
+      if (minutes < 60) return ` · 已等待 ${minutes} 分钟`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return ` · 已等待 ${hours} 小时${hours >= 3 ? '，多半已在 QQ 侧过期' : ''}`;
+      return ` · 已等待 ${Math.floor(hours / 24)} 天，多半已在 QQ 侧过期`;
+    }
+
     function fmtUptime(ms) {
       if (!ms || ms < 0) return '—';
       const total = Math.floor(ms / 1000);
@@ -88,6 +98,26 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'qqb-field' },
         h('span', { className: 'qqb-field-label' }, label),
         h('span', { className: `qqb-field-value${mono ? ' qqb-mono' : ''}` }, value || '—'),
+      );
+    }
+
+    // A real switch for an on/off feature: the whole control is the label, and
+    // the state is written straight through to settings so it survives reload.
+    function Switch({ checked, onChange, disabled, onLabel, offLabel, title }) {
+      return h('label', {
+        className: `qqb-switch${checked ? ' qqb-switch-on' : ''}${disabled ? ' qqb-switch-busy' : ''}`,
+        title: title || '',
+      },
+      h('input', {
+        type: 'checkbox',
+        checked: Boolean(checked),
+        disabled: Boolean(disabled),
+        onChange: (event) => onChange(event.target.checked),
+      }),
+      h('span', { className: 'qqb-switch-track', 'aria-hidden': 'true' },
+        h('span', { className: 'qqb-switch-knob' }),
+      ),
+      h('span', { className: 'qqb-switch-text' }, checked ? onLabel : offLabel),
       );
     }
 
@@ -229,7 +259,7 @@ window.__ModuleLoader__.load({
               { path: ['persona', 'identity'], label: '底层人设（最高优先级）', kind: 'textarea', rows: 5 },
               { path: ['persona', 'style'], label: '说话风格', kind: 'textarea', rows: 3 },
               { path: ['persona', 'rules'], label: '行为准则与禁忌', kind: 'textarea', rows: 4 },
-              { path: ['persona', 'autoEvolve'], label: '根据长期交流自动完善人设', kind: 'checkbox' },
+              { path: ['persona', 'autoEvolve'], label: '根据长期交流自动完善人设', kind: 'checkbox', hint: '总开关在人设页「人设演化」卡片顶部；关闭后这里也不会触发。' },
               { path: ['persona', 'evolveEvery'], label: '每多少次回复演化一次', kind: 'number' },
             ],
           },
@@ -1471,6 +1501,9 @@ window.__ModuleLoader__.load({
       const [memoryQuery, setMemoryQuery] = useState('');
       const [memoryLoading, setMemoryLoading] = useState(false);
       const [requests, setRequests] = useState([]);
+      const [requestBusy, setRequestBusy] = useState('');
+      const [requestFeedback, setRequestFeedback] = useState({});
+      const [requestNotice, setRequestNotice] = useState('');
       const [joinedGroups, setJoinedGroups] = useState(null);
       const [groupsLoading, setGroupsLoading] = useState(false);
       const [tab, setTab] = useState('basic');
@@ -1561,7 +1594,18 @@ window.__ModuleLoader__.load({
           setOverview(nextOverview);
           if (nextDiary && nextDiary.ok) setDiary(nextDiary);
           if (nextStickers && nextStickers.ok) setStickers(nextStickers);
-          if (nextRequests && nextRequests.ok) setRequests(nextRequests.requests || []);
+          if (nextRequests && nextRequests.ok) {
+            const nextList = nextRequests.requests || [];
+            setRequests(nextList);
+            const live = new Set(nextList.map((item) => item.flag));
+            setRequestFeedback((previous) => {
+              const kept = {};
+              for (const [flag, value] of Object.entries(previous)) {
+                if (live.has(flag)) kept[flag] = value;
+              }
+              return kept;
+            });
+          }
           const loadedSettings = nextSettings && nextSettings.settings;
           if (loadedSettings) {
             setSettings(loadedSettings);
@@ -1570,7 +1614,9 @@ window.__ModuleLoader__.load({
               settingsInitialized.current = true;
             }
           }
-          setError('');
+          // Silent polls must not wipe a failure the user still needs to read;
+          // only an explicit (user driven) load clears the page-level error.
+          if (!silent) setError('');
           if ((!initialized.current || refreshEvolved) && nextOverview.persona) {
             setEvolved(nextOverview.persona.evolved || '');
             initialized.current = true;
@@ -1743,7 +1789,28 @@ window.__ModuleLoader__.load({
           setEvolved(result.persona.evolved || '');
           setOverview((previous) => (previous ? { ...previous, persona: result.persona } : previous));
         }
+        if (result && result.disabled) {
+          setNotice(result.message || '人设演化已关闭。');
+          return;
+        }
         setNotice(result && result.evolved ? '人设已根据长期记忆更新。' : '素材还不够，暂时没有新的演化结果。');
+      });
+
+      // The master switch is a setting, so it is written on its own instead of
+      // riding on the full settings form; other unsaved edits stay untouched.
+      const toggleEvolution = (next) => run('evolve-switch', async () => {
+        const result = await post('/settings', { persona: { evolution: Boolean(next) } });
+        if (!result || result.ok === false) {
+          throw new Error(result && result.error ? result.error : '保存人设演化开关失败');
+        }
+        setSettings((previous) => (result.settings ? result.settings : previous));
+        setDraft((previous) => (previous ? setIn(previous, ['persona', 'evolution'], Boolean(next)) : previous));
+        setOverview((previous) => (previous && previous.persona
+          ? { ...previous, persona: { ...previous.persona, evolution: Boolean(next) } }
+          : previous));
+        setNotice(next
+          ? '人设演化已开启：继续根据长期交流更新自我认知。'
+          : '人设演化已关闭：不再演化，自我认知也不再进入提示词。文本保留，随时可以打开。');
       });
 
       const loadMemoryContacts = useCallback(async (query, offset = 0) => {
@@ -1785,14 +1852,91 @@ window.__ModuleLoader__.load({
         if (memoryOpen) await loadMemoryContacts(memoryQuery, 0);
       });
 
-      const resolveQqRequest = (request, approve) => run(`request-${request.flag}`, async () => {
-        const result = await post('/requests/action', { flag: request.flag, approve });
-        if (!result || result.ok === false) {
-          throw new Error(result && result.error ? result.error : '处理请求失败');
+      // One request per row: approve / reject go to QQ over OneBot, ignore is a
+      // local dismissal (the flag keeps pending on the QQ side until it expires).
+      // Every failure is reported inline on the row, right where the click
+      // happened, because the page-level alert sits above the fold.
+      const noteRequest = (flag, tone, text) => {
+        if (!mounted.current) return;
+        setRequestFeedback((previous) => {
+          if (!text) {
+            const next = { ...previous };
+            delete next[flag];
+            return next;
+          }
+          return { ...previous, [flag]: { tone, text } };
+        });
+      };
+
+      const resolveQqRequest = async (request, action) => {
+        const flag = request.flag;
+        if (requestBusy) return;
+        setRequestBusy(flag);
+        setNotice('');
+        setRequestNotice('');
+        noteRequest(flag, 'busy', action === 'ignore' ? '正在忽略…' : '正在发送到 QQ…');
+        try {
+          const result = await post('/requests/action', { flag, action });
+          if (!result || result.ok === false) {
+            throw new Error(result && result.error ? result.error : '处理请求失败');
+          }
+          if (Array.isArray(result.requests)) {
+            setRequests(result.requests);
+            noteRequest(flag, '', '');
+          }
+          setNotice(result.message || ({ approve: '已同意请求。', reject: '已拒绝请求。', ignore: '已忽略请求。' }[action] || '处理完成。'));
+        } catch (failure) {
+          noteRequest(flag, 'error', failure && failure.message ? failure.message : String(failure));
+        } finally {
+          if (mounted.current) setRequestBusy('');
         }
-        setNotice(result.message || (approve ? '已同意请求。' : '已拒绝请求。'));
-        await load(true);
-      });
+      };
+
+      const ignoreAllRequests = async () => {
+        if (requests.length === 0 || requestBusy) return;
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function'
+          && !window.confirm(`忽略 ${requests.length} 条请求？只从列表移除，不会向 QQ 发送任何操作。`)) {
+          return;
+        }
+        const flags = requests.map((item) => item.flag);
+        setRequestBusy('all');
+        setNotice('');
+        setRequestNotice('');
+        setRequestFeedback((previous) => {
+          const next = { ...previous };
+          for (const flag of flags) next[flag] = { tone: 'busy', text: '正在忽略…' };
+          return next;
+        });
+        try {
+          for (const flag of flags) {
+            await post('/requests/action', { flag, action: 'ignore' });
+          }
+          if (!mounted.current) return;
+          setRequests((previous) => previous.filter((item) => !flags.includes(item.flag)));
+          setRequestFeedback({});
+          setRequestNotice(`已忽略 ${flags.length} 条请求。`);
+        } catch (failure) {
+          if (!mounted.current) return;
+          setRequestNotice(`忽略过程中出错：${failure && failure.message ? failure.message : failure}`);
+          try {
+            const refreshed = await api('/requests');
+            if (mounted.current && refreshed && refreshed.ok) {
+              setRequests(refreshed.requests || []);
+              setRequestFeedback({});
+            }
+          } catch {
+            setRequestFeedback((previous) => {
+              const next = { ...previous };
+              for (const flag of flags) {
+                if (next[flag] && next[flag].tone === 'busy') delete next[flag];
+              }
+              return next;
+            });
+          }
+        } finally {
+          if (mounted.current) setRequestBusy('');
+        }
+      };
 
       const clearGroup = (group) => run(`clear-${group.id}`, async () => {
         if (typeof window !== 'undefined' && typeof window.confirm === 'function'
@@ -1820,6 +1964,15 @@ window.__ModuleLoader__.load({
       const groups = (overview && overview.groups) || [];
       const persona = (overview && overview.persona) || null;
       const config = (status && status.config) || null;
+      // One source of truth for the switch: the settings draft first (it is what
+      // the save button would write), then the live overview/status mirrors.
+      const evolutionOn = (() => {
+        const fromDraft = draft && draft.persona ? draft.persona.evolution : undefined;
+        if (typeof fromDraft === 'boolean') return fromDraft;
+        if (persona && typeof persona.evolution === 'boolean') return persona.evolution;
+        if (config && typeof config.evolution === 'boolean') return config.evolution;
+        return true;
+      })();
 
       return h('div', { className: 'qqb-page' },
         h('style', null, CSS),
@@ -1905,6 +2058,7 @@ window.__ModuleLoader__.load({
               h(Field, { label: '唤醒词', value: config && config.wakeWords && config.wakeWords.length ? config.wakeWords.join(' / ') : '未设置' }),
               h(Field, { label: '分段回复', value: config ? (config.split ? '开启' : '关闭') : '—' }),
               h(Field, { label: '群上下文', value: config ? `${config.groupContext} 条` : '—' }),
+              h(Field, { label: '人设演化', value: evolutionOn ? '开启' : '关闭' }),
               h(Field, { label: '自动演化', value: config ? (config.autoEvolve ? '开启' : '关闭') : '—' }),
             ),
             h('p', { className: 'qqb-hint' },
@@ -1949,12 +2103,41 @@ window.__ModuleLoader__.load({
 
         tab === 'security' ? h('section', { className: 'qqb-card' },
           h('div', { className: 'qqb-card-head' },
-            h('h3', null, 'QQ 好友 / 群请求'),
-            h('span', { className: 'qqb-count' }, `${requests.length} 个待处理`),
+            h('div', null,
+              h('h3', null, 'QQ 好友 / 群请求'),
+              h('p', { className: 'qqb-sub' },
+                '「同意 / 拒绝」会立刻发送给 QQ；「忽略」只把这条从列表移除，不向 QQ 发送任何操作。',
+              ),
+            ),
+            h('div', { className: 'qqb-actions' },
+              requests.length > 0
+                ? h('button', {
+                  type: 'button',
+                  className: 'qqb-btn qqb-btn-ghost',
+                  disabled: requestBusy !== '',
+                  onClick: () => { void ignoreAllRequests(); },
+                }, requestBusy === 'all' ? '忽略中…' : '全部忽略')
+                : null,
+              h('span', { className: 'qqb-count' }, `${requests.length} 个待处理`),
+            ),
           ),
+          requestNotice
+            ? h('div', { className: 'qqb-row-feedback qqb-row-feedback-ok' }, requestNotice)
+            : null,
+          status && status.connected === false
+            ? h('div', { className: 'qqb-row-feedback qqb-row-feedback-error' },
+              `OneBot 未连接（${status.wsUrl || '未配置'}）：「同意 / 拒绝」暂时送不到 QQ，点了会在这里报错；可以先「忽略」把请求移出列表，等 NapCat 恢复后重新发起。`,
+            )
+            : null,
           requests.length === 0
             ? h('div', { className: 'qqb-empty' }, '暂无待处理的好友或群请求。')
-            : h('div', { className: 'qqb-list' }, requests.map((request) => h('div', { className: 'qqb-row', key: request.flag },
+            : h('div', { className: 'qqb-list' }, requests.map((request) => {
+              const feedback = requestFeedback[request.flag];
+              const rowBusy = requestBusy === request.flag || requestBusy === 'all';
+              return h('div', {
+                className: `qqb-row${feedback && feedback.tone === 'error' ? ' qqb-row-has-error' : ''}`,
+                key: request.flag,
+              },
               h('div', { className: 'qqb-row-main' },
                 h('div', { className: 'qqb-row-title' },
                   request.type === 'friend' ? '好友请求' : (request.subType === 'invite' ? '群邀请' : '加群请求'),
@@ -1962,23 +2145,33 @@ window.__ModuleLoader__.load({
                 ),
                 request.groupId ? h('div', { className: 'qqb-row-note' }, `群号：${request.groupId}`) : null,
                 request.comment ? h('div', { className: 'qqb-row-text' }, request.comment) : null,
-                h('div', { className: 'qqb-row-meta' }, `flag: ${request.flag} · ${fmtTime(request.receivedAt)}`),
+                h('div', { className: 'qqb-row-meta' }, `flag: ${request.flag} · ${fmtTime(request.receivedAt)}${fmtRequestAge(request.receivedAt)}`),
+                feedback
+                  ? h('div', { className: `qqb-row-feedback qqb-row-feedback-${feedback.tone}` }, feedback.text)
+                  : null,
               ),
               h('div', { className: 'qqb-actions' },
                 h('button', {
                   type: 'button',
                   className: 'qqb-btn',
-                  disabled: busy === `request-${request.flag}`,
-                  onClick: () => resolveQqRequest(request, true),
+                  disabled: rowBusy,
+                  onClick: () => { void resolveQqRequest(request, 'approve'); },
                 }, '同意'),
                 h('button', {
                   type: 'button',
                   className: 'qqb-btn qqb-btn-danger',
-                  disabled: busy === `request-${request.flag}`,
-                  onClick: () => resolveQqRequest(request, false),
+                  disabled: rowBusy,
+                  onClick: () => { void resolveQqRequest(request, 'reject'); },
                 }, '拒绝'),
+                h('button', {
+                  type: 'button',
+                  className: 'qqb-btn qqb-btn-ghost',
+                  disabled: rowBusy,
+                  onClick: () => { void resolveQqRequest(request, 'ignore'); },
+                }, '忽略'),
               ),
-            ))),
+              );
+            })),
         ) : null,
 
         tab === 'content' ? h(React.Fragment, null,
@@ -2019,14 +2212,25 @@ window.__ModuleLoader__.load({
             h('div', null,
               h('h3', null, '人设演化'),
               h('p', { className: 'qqb-sub' },
-                '底层人设在下方「参数设置」里；这里显示并编辑机器人在长期交流中形成的“自我认知”。',
+                evolutionOn
+                  ? '底层人设在下方「参数设置」里；这里显示并编辑机器人在长期交流中形成的“自我认知”。'
+                  : '演化已关闭：机器人只按底层人设说话，自我认知不进入提示词。下面的文本保留，随时可以打开。',
               ),
             ),
             h('div', { className: 'qqb-actions' },
+              h(Switch, {
+                checked: evolutionOn,
+                disabled: busy === 'evolve-switch' || !settingsInitialized.current,
+                onLabel: '演化开启',
+                offLabel: '演化关闭',
+                title: '关闭后不再自动演化，已形成的自我认知也不再发给模型',
+                onChange: toggleEvolution,
+              }),
               h('button', {
                 type: 'button',
                 className: 'qqb-btn qqb-btn-ghost',
-                disabled: busy === 'evolve',
+                disabled: busy === 'evolve' || !evolutionOn,
+                title: evolutionOn ? '' : '先打开「人设演化」开关',
                 onClick: evolveNow,
               }, busy === 'evolve' ? '演化中…' : '立即演化'),
               h('button', {
@@ -2240,7 +2444,17 @@ window.__ModuleLoader__.load({
       .qqb-icon-btn:hover { background:var(--dsw-alias-bg-layer-1); border-color:var(--dsw-alias-border-l1); }
       .qqb-textarea { width:100%; box-sizing:border-box; resize:vertical; min-height:96px; padding:10px 12px; border-radius:10px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary); font:inherit; font-size:13px; line-height:1.6; outline:none; }
       .qqb-textarea:focus { border-color:var(--dsw-alias-brand-primary); }
-      .qqb-actions { display:flex; gap:8px; flex:none; }
+      .qqb-actions { display:flex; gap:8px; flex:none; align-items:center; }
+      .qqb-switch { position:relative; display:inline-flex; align-items:center; gap:7px; flex:none; cursor:pointer; user-select:none; }
+      .qqb-switch input { position:absolute; width:1px; height:1px; opacity:0; margin:0; pointer-events:none; }
+      .qqb-switch-track { position:relative; box-sizing:border-box; width:34px; height:18px; border-radius:999px; background:var(--dsw-alias-bg-layer-2); border:1px solid var(--dsw-alias-border-l2); transition:background .16s ease, border-color .16s ease; flex:none; }
+      .qqb-switch-knob { position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--dsw-alias-label-secondary); transition:transform .16s ease, background .16s ease; }
+      .qqb-switch-on .qqb-switch-track { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary); }
+      .qqb-switch-on .qqb-switch-knob { transform:translateX(16px); background:#fff; }
+      .qqb-switch-text { font-size:12px; color:var(--dsw-alias-label-secondary); white-space:nowrap; }
+      .qqb-switch-on .qqb-switch-text { color:var(--dsw-alias-label-primary); }
+      .qqb-switch-busy { opacity:.6; cursor:default; }
+      .qqb-switch input:focus-visible + .qqb-switch-track { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:2px; }
       .qqb-btn { appearance:none; border:1px solid transparent; border-radius:8px; padding:6px 12px; font:inherit; font-size:12px; cursor:pointer; background:var(--dsw-alias-brand-primary); color:#fff; white-space:nowrap; }
       .qqb-btn:disabled { opacity:.5; cursor:default; }
       .qqb-btn-ghost { background:transparent; border-color:var(--dsw-alias-border-l2); color:var(--dsw-alias-label-primary); }
@@ -2255,6 +2469,12 @@ window.__ModuleLoader__.load({
       .qqb-row-text { font-size:12px; line-height:1.55; color:var(--dsw-alias-label-secondary); overflow-wrap:anywhere; }
       .qqb-row-note { font-size:12px; line-height:1.5; color:var(--dsw-alias-state-warn-primary); }
       .qqb-row-meta { font-size:11px; color:var(--dsw-alias-label-secondary); opacity:.8; }
+      .qqb-row-feedback { font-size:12px; line-height:1.55; padding:6px 9px; border-radius:8px; border:1px solid var(--dsw-alias-border-l1); background:var(--dsw-alias-bg-layer-1); overflow-wrap:anywhere; }
+      .qqb-row-feedback-busy { color:var(--dsw-alias-label-secondary); }
+      .qqb-row-feedback-error { color:var(--dsw-alias-state-error-primary); border-color:var(--dsw-alias-state-error-primary); }
+      .qqb-row-feedback-ok { color:var(--dsw-alias-state-success-primary); }
+      .qqb-row-has-error { border-color:var(--dsw-alias-state-error-primary); }
+      @media (max-width:640px) { .qqb-actions { flex-wrap:wrap; } }
       .qqb-tag { display:inline-block; margin-left:6px; padding:0 5px; border-radius:4px; background:var(--dsw-alias-bg-layer-1); border:1px solid var(--dsw-alias-border-l1); font-size:10px; font-weight:400; color:var(--dsw-alias-label-secondary); }
       .qqb-memory-editor { display:flex; flex-direction:column; gap:7px; margin-top:8px; padding-top:8px; border-top:1px solid var(--dsw-alias-border-l1); }
       .qqb-memory-editor .qqb-field { display:flex; flex-direction:column; gap:3px; }

@@ -12,9 +12,9 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { access, appendFile, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 
 export const inject = ['agents', 'llm', 'systemPrompt', 'tools'];
@@ -142,8 +142,10 @@ export const Config = z.object({
       })).default([]).description('预设对话。'),
     })).default([])
       .description('多个人设预设：每条包含名字、底层人设、风格、准则和预设对话。'),
+    evolution: z.boolean().default(true)
+      .description('「人设演化」总开关。关闭后不再演化，已形成的自我认知也不再注入提示词，机器人只按底层人设说话；文本保留，重新打开即恢复。'),
     autoEvolve: z.boolean().default(true)
-      .description('根据长期聊天自动完善人设：定期总结出“自我认知”和“对联系人的印象”。'),
+      .description('根据长期聊天自动完善人设：定期总结出“自我认知”和“对联系人的印象”。总开关关闭时无效。'),
     evolveEvery: z.number().default(24).min(4).max(500)
       .description('每完成多少次回复后尝试演化一次人设。'),
   }).description('人设与自动演化。'),
@@ -503,6 +505,7 @@ function normalizeConfig(config) {
         }))
         .slice(0, 30),
       autoEvolve: bool(obj(c.persona).autoEvolve, true),
+      evolution: bool(obj(c.persona).evolution, true),
       evolveEvery: Math.max(4, num(obj(c.persona).evolveEvery, 24)),
     },
     trigger: {
@@ -886,6 +889,7 @@ export function apply(ctx, rawConfig) {
         examples: [{ user: 'string', assistant: 'string' }],
       }],
       autoEvolve: 'boolean',
+      evolution: 'boolean',
       evolveEvery: 'number',
     },
     trigger: {
@@ -1035,6 +1039,7 @@ export function apply(ctx, rawConfig) {
           examples: (preset.examples || []).map((row) => ({ ...row })),
         })),
         autoEvolve: p.autoEvolve,
+        evolution: p.evolution,
         evolveEvery: p.evolveEvery,
       },
       trigger: {
@@ -1274,6 +1279,7 @@ export function apply(ctx, rawConfig) {
       wakeMode: cfg.trigger.wakeMode,
       split: cfg.reply.split,
       autoEvolve: cfg.persona.autoEvolve,
+      evolution: cfg.persona.evolution,
       groupContext: cfg.context.groupSize,
       proactive: cfg.proactive.enabled,
     },
@@ -1951,7 +1957,7 @@ export function apply(ctx, rawConfig) {
 
   function buildSystemPrompt() {
     const p = cfg.persona;
-    const evolved = state.persona.evolved
+    const evolved = p.evolution && state.persona.evolved
       ? `\n\n【你在长期交流中形成的自我认知（会继续演化）】\n${state.persona.evolved}`
       : '';
     const examples = (p.examples || []).filter((row) => row.user && row.assistant).slice(0, 8);
@@ -3955,7 +3961,7 @@ export function apply(ctx, rawConfig) {
       `【底层人设（只作为底色）】\n${p.identity}`,
       `【角色原本的说话风格（日记里可以更松弛，不必每句都端着）】\n${p.style}`,
       `【行为准则】\n${p.rules}`,
-      state.persona.evolved ? `【自我认知（保留自称和口癖，但允许疲惫、无聊、想吃东西、为小事烦）】\n${state.persona.evolved}` : '',
+      p.evolution && state.persona.evolved ? `【自我认知（保留自称和口癖，但允许疲惫、无聊、想吃东西、为小事烦）】\n${state.persona.evolved}` : '',
       '',
       '【这次要写得像真人】',
       '- 日记不是角色台词，也不是小说旁白；不要每句都文绉绉，不要一直端着。',
@@ -4228,6 +4234,10 @@ export function apply(ctx, rawConfig) {
 
   async function evolvePersona(force = false) {
     if (evolving) return state.persona.evolved;
+    if (!cfg.persona.evolution) {
+      log('info', '人设演化已关闭，跳过本次演化（#qq evolve on 或设置页开关可重新打开）');
+      return state.persona.evolved;
+    }
     if (!cfg.persona.autoEvolve && !force) return state.persona.evolved;
     evolving = true;
     try {
@@ -4315,17 +4325,66 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  async function resolveRequest(flag, approve) {
+  // A request is "pending" only while it is still open. `ignored` is a local
+  // decision: the entry leaves the list, OneBot is never called, and the flag
+  // simply expires on the QQ side.
+  const REQUEST_STATUS_LABELS = { approved: '已同意', rejected: '已拒绝', ignored: '已忽略' };
+
+  function pendingRequests(limit = 0) {
+    const list = Object.values(state.requests)
+      .filter((request) => request && request.status === 'pending')
+      .sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
+    return limit > 0 ? list.slice(0, limit) : list;
+  }
+
+  function normalizeDecision(value) {
+    if (value === true) return 'approve';
+    if (value === false) return 'reject';
+    const key = String(value == null ? '' : value).trim().toLowerCase();
+    if (key === 'approve' || key === 'agree' || key === 'accept' || key === 'true') return 'approve';
+    if (key === 'reject' || key === 'refuse' || key === 'deny' || key === 'false') return 'reject';
+    if (key === 'ignore' || key === 'dismiss' || key === 'skip') return 'ignore';
+    return '';
+  }
+
+  function readDecision(body) {
+    if (!body || typeof body !== 'object') return '';
+    return normalizeDecision(body.action != null ? body.action : body.approve);
+  }
+
+  function bridgeOnline() {
+    if (ws && ws.readyState === 1) return true;
+    return Boolean(cfg.connection.httpUrl);
+  }
+
+  async function resolveRequest(flag, decision) {
+    const action = normalizeDecision(decision);
+    if (!action) return '未知的处理方式。';
     const request = state.requests[flag];
-    if (!request) return '没有这个请求。';
-    if (request.status === 'approved' || request.status === 'rejected') {
-      return `这个请求已经处理过：${request.status === 'approved' ? '已同意' : '已拒绝'}。`;
+    if (!request) return '没有这个请求（可能已被清理）。';
+    if (request.status && request.status !== 'pending') {
+      return `这个请求已经处理过：${REQUEST_STATUS_LABELS[request.status] || request.status}。`;
+    }
+    if (action === 'ignore') {
+      request.status = 'ignored';
+      request.resolvedAt = Date.now();
+      scheduleSave();
+      log('info', `QQ 请求 ${flag}：已忽略（未向 OneBot 发送操作）`);
+      return '已忽略：只从待处理列表移除，没有向 QQ 发送任何操作，这条请求会自然过期。';
+    }
+    const approve = action === 'approve';
+    if (!bridgeOnline()) {
+      throw new Error(`OneBot 未连接（${cfg.connection.wsUrl}），「${approve ? '同意' : '拒绝'}」没有送达 QQ。等 NapCat 恢复后重试，或者先点「忽略」把这条从列表里移除。`);
     }
     const params = request.type === 'friend'
-      ? { flag, approve: Boolean(approve) }
-      : { flag, sub_type: request.subType || 'add', approve: Boolean(approve) };
-    const action = request.type === 'friend' ? 'set_friend_add_request' : 'set_group_add_request';
-    await callAction(action, params, 15000);
+      ? { flag, approve }
+      : { flag, sub_type: request.subType === 'invite' ? 'invite' : 'add', approve };
+    const onebotAction = request.type === 'friend' ? 'set_friend_add_request' : 'set_group_add_request';
+    try {
+      await callAction(onebotAction, params, 15000);
+    } catch (error) {
+      throw new Error(`OneBot 拒绝了这次操作：${error && error.message ? error.message : error}。请求仍留在列表里，可以重试或忽略。`);
+    }
     request.status = approve ? 'approved' : 'rejected';
     request.resolvedAt = Date.now();
     scheduleSave();
@@ -4355,7 +4414,7 @@ export function apply(ctx, rawConfig) {
     const auto = type === 'friend' ? cfg.access.autoApproveFriends : cfg.access.autoApproveGroups;
     if (auto) {
       try {
-        await resolveRequest(flag, true);
+        await resolveRequest(flag, 'approve');
         return;
       } catch (error) {
         log('warn', '自动同意 QQ 请求失败', error && error.message ? error.message : error);
@@ -4400,25 +4459,27 @@ export function apply(ctx, rawConfig) {
         '#qq base <文本> —— 修改底层人设 identity',
         '#qq persona <文本> —— 覆盖自我认知',
         '#qq evolve —— 立即演化人设',
+        '#qq evolve on|off —— 打开/关闭「人设演化」总开关',
         '#qq requests —— 查看待处理好友/群请求',
         '#qq approve <flag> —— 同意请求',
         '#qq reject <flag> —— 拒绝请求',
+        '#qq ignore <flag> —— 只从列表移除，不向 QQ 发送操作',
       ].join('\n');
     }
     if (command === 'requests') {
-      const pending = Object.values(state.requests).filter((request) => request.status !== 'approved' && request.status !== 'rejected');
+      const pending = pendingRequests(12);
       if (pending.length === 0) return '没有待处理的请求。';
-      return pending.slice(0, 12).map((request) => {
+      return pending.map((request) => {
         const type = request.type === 'friend' ? '好友' : (request.subType === 'invite' ? '群邀请' : '加群');
         return `${type} ${request.name || ''}(${request.userId})${request.groupId ? ` 群 ${request.groupId}` : ''}${request.comment ? ` 附言：${request.comment}` : ''}\nflag: ${request.flag}`;
-      }).join('\n\n') + '\n\n用 #qq approve <flag> 或 #qq reject <flag> 处理。';
+      }).join('\n\n') + '\n\n用 #qq approve <flag> 或 #qq reject <flag> 处理，或用 #qq ignore <flag> 从列表移除。';
     }
-    if (command === 'approve' || command === 'reject') {
+    if (command === 'approve' || command === 'reject' || command === 'ignore') {
       if (!arg) return `用法：#qq ${command} <flag>`;
       try {
-        return await resolveRequest(arg.trim(), command === 'approve');
+        return await resolveRequest(arg.trim(), command);
       } catch (error) {
-        return `${command === 'approve' ? '同意' : '拒绝'}失败：${error && error.message ? error.message : error}`;
+        return `${{ approve: '同意', reject: '拒绝', ignore: '忽略' }[command]}失败：${error && error.message ? error.message : error}`;
       }
     }
     if (command === 'status') {
@@ -4448,6 +4509,15 @@ export function apply(ctx, rawConfig) {
       return `底层人设已更新。${result && result.warning ? `（注意：${result.warning}）` : ''}`;
     }
     if (command === 'evolve') {
+      const mode = arg.toLowerCase();
+      if (mode === 'on' || mode === 'off') {
+        const enabled = mode === 'on';
+        if (cfg.persona.evolution === enabled) return `人设演化已经是${enabled ? '开启' : '关闭'}状态。`;
+        const result = applySettings({ persona: { evolution: enabled } });
+        return `人设演化已${enabled ? '开启' : '关闭'}。${enabled ? '' : '已形成的自我认知保留，但不再注入提示词；'}${result && result.warning ? `（注意：${result.warning}）` : ''}`;
+      }
+      if (mode && mode !== 'now') return '用法：#qq evolve / #qq evolve on / #qq evolve off';
+      if (!cfg.persona.evolution) return '人设演化已关闭。先发 #qq evolve on 打开总开关。';
       void evolvePersona(true);
       return '开始演化人设，稍后生效。';
     }
@@ -4522,7 +4592,7 @@ export function apply(ctx, rawConfig) {
     }
     void compressContact(job.uin);
 
-    if (cfg.persona.autoEvolve) {
+    if (cfg.persona.evolution && cfg.persona.autoEvolve) {
       state.persona.interactions += 1;
       if (state.persona.interactions % Math.max(4, cfg.persona.evolveEvery) === 0) {
         void evolvePersona(false);
@@ -4781,6 +4851,7 @@ export function apply(ctx, rawConfig) {
         style: cfg.persona.style,
         rules: cfg.persona.rules,
         evolved: state.persona.evolved,
+        evolution: cfg.persona.evolution,
         interactions: state.persona.interactions,
         updatedAt: state.persona.updatedAt,
         profileKey: state.profileKey || 'custom',
@@ -4876,6 +4947,71 @@ export function apply(ctx, rawConfig) {
               ok: true,
               count,
               message: count > 0 ? `${count} 张表情已加入自动识别队列，几秒后刷新查看标签。` : '没有需要识别的表情。',
+            });
+          } catch (error) {
+            sendJson(res, 400, { error: error.message });
+          }
+        },
+      },
+      {
+        kind: 'exact',
+        path: '/qq-bot/stickers/import',
+        handler: async (req, res) => {
+          if ((req.method || 'GET').toUpperCase() !== 'POST') {
+            sendJson(res, 405, { error: 'method not allowed' });
+            return;
+          }
+          try {
+            if (!cfg.stickers.enabled) throw new Error('表情包功能已关闭');
+            const body = await readJsonBody(req, 256 * 1024);
+            const fromDir = String(body.dir || '').trim();
+            const explicit = Array.isArray(body.files)
+              ? body.files.map((file) => String(file || '').trim()).filter(Boolean)
+              : [];
+            let paths = explicit.map((file) => resolve(file));
+            if (fromDir) {
+              const root = resolve(fromDir);
+              const entries = await readdir(root, { withFileTypes: true });
+              paths = paths.concat(
+                entries
+                  .filter((entry) => entry.isFile())
+                  .map((entry) => join(root, entry.name))
+                  .sort(),
+              );
+            }
+            if (paths.length === 0) throw new Error('没有可导入的文件');
+            const source = String(body.source || 'import');
+            const skipped = [];
+            const ids = [];
+            for (const file of paths) {
+              let bytes = null;
+              try {
+                bytes = await readFile(file);
+              } catch (error) {
+                skipped.push({ file, reason: error && error.message ? error.message : '读取失败' });
+                continue;
+              }
+              if (bytes.length > cfg.stickers.maxBytes) {
+                skipped.push({ file, reason: `超过大小上限 ${cfg.stickers.maxBytes}` });
+                continue;
+              }
+              const item = await saveStickerBytes(bytes, { name: basename(file), source });
+              if (!item) {
+                skipped.push({ file, reason: '不是支持的图片格式' });
+                continue;
+              }
+              ids.push(item.id);
+              if (body.autoTag !== false) enqueueVisionTag(item);
+            }
+            scheduleSave();
+            sendJson(res, 200, {
+              ok: true,
+              scanned: paths.length,
+              imported: ids.length,
+              skipped,
+              count: Object.keys(state.stickers.items).length,
+              dir: cfg.stickers.dir,
+              message: `导入 ${ids.length} 张，跳过 ${skipped.length} 张。`,
             });
           } catch (error) {
             sendJson(res, 400, { error: error.message });
@@ -5043,10 +5179,7 @@ export function apply(ctx, rawConfig) {
             sendJson(res, 405, { error: 'method not allowed' });
             return;
           }
-          const requests = Object.values(state.requests)
-            .filter((request) => request.status !== 'approved' && request.status !== 'rejected')
-            .sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0))
-            .map((request) => ({ ...request }));
+          const requests = pendingRequests().map((request) => ({ ...request }));
           sendJson(res, 200, { ok: true, requests });
         },
       },
@@ -5062,8 +5195,15 @@ export function apply(ctx, rawConfig) {
             const body = await readJsonBody(req);
             const flag = String(body.flag || '').trim();
             if (!flag) throw new Error('缺少请求 flag');
-            const message = await resolveRequest(flag, Boolean(body.approve));
-            sendJson(res, 200, { ok: true, message, requests: Object.values(state.requests).filter((request) => request.status !== 'approved' && request.status !== 'rejected') });
+            const decision = readDecision(body);
+            if (!decision) throw new Error('缺少处理方式（action: approve / reject / ignore）');
+            const message = await resolveRequest(flag, decision);
+            sendJson(res, 200, {
+              ok: true,
+              decision,
+              message,
+              requests: pendingRequests().map((request) => ({ ...request })),
+            });
           } catch (error) {
             sendJson(res, 400, { error: error.message });
           }
@@ -5185,6 +5325,16 @@ export function apply(ctx, rawConfig) {
         kind: 'exact',
         path: '/qq-bot/evolve',
         handler: async (_req, res) => {
+          if (!cfg.persona.evolution) {
+            sendJson(res, 200, {
+              ok: true,
+              disabled: true,
+              evolved: state.persona.evolved,
+              message: '人设演化已关闭：先打开「人设演化」开关再试。',
+              persona: overview().persona,
+            });
+            return;
+          }
           const evolved = await evolvePersona(true);
           sendJson(res, 200, { ok: true, evolved, persona: overview().persona });
         },
