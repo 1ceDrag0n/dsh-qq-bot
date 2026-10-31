@@ -1,7 +1,7 @@
 {
   "name": "@local/dsh-qq-bot",
-  "version": "1.1.0",
-  "description": "QQ chat bridge for DeepSeek Harness: OneBot v11, persona boards, long-term memory, tools and a live settings page.",
+  "version": "1.2.0",
+  "description": "QQ chat bridge for DeepSeek Harness: OneBot v11, persona boards, long-term memory, image search, tools and a live settings page.",
   "license": "MIT",
   "author": "dsh-qq-bot contributors",
   "type": "module",

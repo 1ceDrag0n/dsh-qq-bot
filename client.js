@@ -232,21 +232,12 @@ window.__ModuleLoader__.load({
               { path: ['model', 'maxTokens'], label: '最大输出 token', kind: 'number' },
             ],
           },
-          {
-            title: '联网搜索',
-            fields: [
-              { path: ['search', 'enabled'], label: '启用独立搜索模型', kind: 'checkbox' },
-              { path: ['search', 'maxResults'], label: '每次返回结果条数', kind: 'number' },
-            ],
-          },
-          {
-            title: '图片解析',
-            fields: [
-              { path: ['vision', 'enabled'], label: '启用独立图片解析模型', kind: 'checkbox' },
-              { path: ['vision', 'autoTagStickers'], label: '自动识别新收藏的表情', kind: 'checkbox' },
-            ],
-          },
         ],
+      },
+      {
+        id: 'abilities',
+        label: '能力',
+        groups: [],
       },
       {
         id: 'persona',
@@ -400,18 +391,6 @@ window.__ModuleLoader__.load({
               { path: ['diary', 'maxChars'], label: '每篇正文上限（字符）', kind: 'number' },
               { path: ['diary', 'includeGroupChats'], label: '把群聊作为日记素材', kind: 'checkbox' },
               { path: ['diary', 'includePrivateChats'], label: '把私聊作为日记素材', kind: 'checkbox' },
-            ],
-          },
-          {
-            title: '表情包设置',
-            fields: [
-              { path: ['stickers', 'enabled'], label: '启用表情包', kind: 'checkbox' },
-              { path: ['stickers', 'dir'], label: '表情保存目录', kind: 'text' },
-              { path: ['stickers', 'autoCollect'], label: '自动收藏收到的表情', kind: 'checkbox' },
-              { path: ['stickers', 'syncQQFaces'], label: '自动同步 QQ 收藏表情', kind: 'checkbox' },
-              { path: ['stickers', 'maxBytes'], label: '单张最大字节数', kind: 'number' },
-              { path: ['stickers', 'cooldownSeconds'], label: '发表情冷却（秒）', kind: 'number' },
-              { path: ['stickers', 'replyChance'], label: '每次回复自动发表情概率（0-1）', kind: 'number', hint: '例如 0.15 = 15%；0 关闭' },
             ],
           },
         ],
@@ -847,7 +826,210 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function SettingsPanel({ draft, setDraft, onSave, busy, tab, setTab, tokenDirty, setTokenDirty, models, onSelectSearchModel, onSelectVisionModel, onSelectChannelModel, onRefreshModels, joinedGroups, groupsLoading, onRefreshGroups, contacts, requestCount }) {
+    function ImageSearchTester({ connected }) {
+      const [query, setQuery] = useState('');
+      const [results, setResults] = useState([]);
+      const [busy, setBusy] = useState('');
+      const [error, setError] = useState('');
+      const [notice, setNotice] = useState('');
+      const [targetType, setTargetType] = useState('group');
+      const [targetId, setTargetId] = useState('');
+
+      const search = async () => {
+        const q = query.trim();
+        if (!q) {
+          setError('先输入要搜索的图片关键词。');
+          return;
+        }
+        setBusy('search');
+        setError('');
+        setNotice('');
+        try {
+          const data = await api(`/images/search?q=${encodeURIComponent(q)}&limit=8`);
+          const list = Array.isArray(data.results) ? data.results : [];
+          setResults(list);
+          if (list.length === 0) setNotice('没有搜到图片，换个关键词试试。');
+        } catch (failure) {
+          setError(failure && failure.message ? failure.message : String(failure));
+        } finally {
+          setBusy('');
+        }
+      };
+
+      const send = async (item) => {
+        const target = targetId.trim();
+        if (!target) {
+          setError('先填群号或 QQ 号，再点发送。');
+          return;
+        }
+        setBusy(`send-${item.id}`);
+        setError('');
+        setNotice('');
+        try {
+          const data = await post('/images/send', {
+            targetType,
+            targetId: target,
+            id: item.id,
+            page: item.page || '',
+          });
+          setNotice(data.message || '已发送。');
+        } catch (failure) {
+          setError(failure && failure.message ? failure.message : String(failure));
+        } finally {
+          setBusy('');
+        }
+      };
+
+      return h('div', { className: 'qqb-image-tester' },
+        h('div', { className: 'qqb-image-searchbar' },
+          h('input', {
+            className: 'qqb-input qqb-input-grow',
+            value: query,
+            placeholder: '试搜一张，例如：橘猫 / 城市夜景',
+            onChange: (event) => setQuery(event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' && !(event.nativeEvent && event.nativeEvent.isComposing)) void search();
+            },
+          }),
+          h('button', {
+            type: 'button',
+            className: 'qqb-btn',
+            disabled: busy === 'search',
+            onClick: () => { void search(); },
+          }, busy === 'search' ? '搜索中…' : '搜索'),
+        ),
+        h('p', { className: 'qqb-hint' },
+          connected
+            ? '这里用已保存的设置做搜索和发送测试；聊天时由 qq_image_search 自动找图并发图。'
+            : 'OneBot 未连接：可以搜索预览，但暂时发不到 QQ；先在「连接」里连上 NapCat / Lagrange。',
+        ),
+        h('div', { className: 'qqb-image-sendbar' },
+          h('select', {
+            className: 'qqb-input qqb-select',
+            value: targetType,
+            onChange: (event) => setTargetType(event.target.value),
+          },
+          h('option', { value: 'group' }, '群聊'),
+          h('option', { value: 'private' }, '私聊'),
+          ),
+          h('input', {
+            className: 'qqb-input',
+            value: targetId,
+            placeholder: targetType === 'group' ? '群号' : 'QQ 号',
+            onChange: (event) => setTargetId(event.target.value),
+          }),
+          h('span', { className: 'qqb-hint' }, '发送目标（只用于本页测试）'),
+        ),
+        error ? h('div', { className: 'qqb-row-feedback qqb-row-feedback-error' }, error) : null,
+        notice ? h('div', { className: 'qqb-row-feedback qqb-row-feedback-ok' }, notice) : null,
+        results.length > 0
+          ? h('div', { className: 'qqb-image-grid' }, results.map((item) => h('div', { className: 'qqb-image-card', key: item.id },
+            item.thumb
+              ? h('img', {
+                className: 'qqb-image-thumb',
+                src: item.thumb,
+                alt: item.title || '搜索结果',
+                loading: 'lazy',
+              })
+              : h('div', { className: 'qqb-image-thumb qqb-image-thumb-empty' }, '无缩略图'),
+            h('div', { className: 'qqb-image-title' }, item.title || '无标题'),
+            h('div', { className: 'qqb-image-meta' }, item.url),
+            h('div', { className: 'qqb-sticker-actions' },
+              h('button', {
+                type: 'button',
+                className: 'qqb-btn',
+                disabled: busy === `send-${item.id}`,
+                onClick: () => { void send(item); },
+              }, busy === `send-${item.id}` ? '发送中…' : '发送'),
+              item.page
+                ? h('a', {
+                  className: 'qqb-btn qqb-btn-ghost',
+                  href: item.page,
+                  target: '_blank',
+                  rel: 'noreferrer',
+                }, '来源')
+                : null,
+            ),
+          )))
+          : null,
+      );
+    }
+
+    function AbilitySettings({ draft, update, models, onSelectSearchModel, onSelectVisionModel, onRefreshModels, connected }) {
+      const renderFields = (fields) => h('div', { className: 'qqb-form-grid' }, fields.map((item) => h(FieldControl, {
+        key: item.path.join('.'),
+        field: item,
+        value: getIn(draft, item.path),
+        onChange: (value) => update(item.path, value),
+      })));
+      const capabilityHead = (title, desc, path) => h('div', { className: 'qqb-form-group-head' },
+        h('div', { className: 'qqb-capability-title' },
+          h('h4', { className: 'qqb-subhead' }, title),
+          h('p', { className: 'qqb-hint' }, desc),
+        ),
+        h(Switch, {
+          checked: Boolean(getIn(draft, path)),
+          onLabel: '已启用',
+          offLabel: '已关闭',
+          onChange: (value) => update(path, value),
+        }),
+      );
+      return h(React.Fragment, null,
+        h('div', { className: 'qqb-form-group qqb-capability' },
+          capabilityHead('联网搜索', '查实时信息、事实核查和外部资料；使用单独的搜索模型，聊天模型没有搜索凭据也能用。', ['search', 'enabled']),
+          h(ModelPicker, {
+            models,
+            selected: draft.search,
+            onSelect: onSelectSearchModel,
+            onRefresh: onRefreshModels,
+            emptyLabel: '跟随默认模型',
+            emptySub: '搜索会话使用的模型',
+          }),
+          renderFields([
+            { path: ['search', 'maxResults'], label: '每次返回结果条数', kind: 'number' },
+          ]),
+        ),
+        h('div', { className: 'qqb-form-group qqb-capability' },
+          capabilityHead('图片解析', '用单独的视觉模型看图；聊天模型是纯文本时也能理解别人发的图片。', ['vision', 'enabled']),
+          h(ModelPicker, {
+            models,
+            selected: draft.vision,
+            onSelect: onSelectVisionModel,
+            onRefresh: onRefreshModels,
+            emptyLabel: '跟随默认模型',
+            emptySub: '图片解析使用的模型',
+          }),
+          renderFields([
+            { path: ['vision', 'autoTagStickers'], label: '自动识别新收藏的表情', kind: 'checkbox' },
+            { path: ['vision', 'maxBytes'], label: '单张待解析图片上限（字节）', kind: 'number' },
+          ]),
+        ),
+        h('div', { className: 'qqb-form-group qqb-capability' },
+          capabilityHead('图片搜索', '按关键词在网上搜图，并把图片直接发到 QQ；聊天里的 qq_image_search 就用它找图和发图。', ['imagesearch', 'enabled']),
+          renderFields([
+            { path: ['imagesearch', 'maxResults'], label: '候选图片数量', kind: 'number' },
+            { path: ['imagesearch', 'maxBytes'], label: '单张图片上限（字节）', kind: 'number' },
+            { path: ['imagesearch', 'safeSearch'], label: '严格安全过滤', kind: 'checkbox' },
+            { path: ['imagesearch', 'cooldownSeconds'], label: '同一聊天发图冷却（秒）', kind: 'number' },
+            { path: ['imagesearch', 'dir'], label: '图片缓存目录', kind: 'text', hint: '留空使用 <dataDir>/images' },
+          ]),
+          h(ImageSearchTester, { connected }),
+        ),
+        h('div', { className: 'qqb-form-group qqb-capability' },
+          capabilityHead('表情包', '自动收藏、同步 QQ 收藏，并按语境发一张表情；表情库在下方「表情库」里管理。', ['stickers', 'enabled']),
+          renderFields([
+            { path: ['stickers', 'replyChance'], label: '每次回复自动发表情概率（0-1）', kind: 'number', hint: '例如 0.15 = 15%；0 关闭' },
+            { path: ['stickers', 'cooldownSeconds'], label: '发表情冷却（秒）', kind: 'number' },
+            { path: ['stickers', 'autoCollect'], label: '自动收藏收到的表情', kind: 'checkbox' },
+            { path: ['stickers', 'syncQQFaces'], label: '自动同步 QQ 收藏表情', kind: 'checkbox' },
+            { path: ['stickers', 'maxBytes'], label: '单张表情最大字节数', kind: 'number' },
+            { path: ['stickers', 'dir'], label: '表情保存目录', kind: 'text' },
+          ]),
+        ),
+      );
+    }
+
+    function SettingsPanel({ draft, setDraft, onSave, busy, tab, setTab, tokenDirty, setTokenDirty, models, onSelectSearchModel, onSelectVisionModel, onSelectChannelModel, onRefreshModels, joinedGroups, groupsLoading, onRefreshGroups, contacts, requestCount, connected }) {
       if (!draft) {
         return h('section', { className: 'qqb-card' },
           h('h3', null, '参数设置'),
@@ -920,30 +1102,18 @@ window.__ModuleLoader__.load({
                 onChange: (value) => update(['model', 'private', 'reasoningEffort'], value),
               }),
             ),
-            h('div', { className: 'qqb-form-group' },
-              h('h4', { className: 'qqb-subhead' }, '图片解析模型'),
-              h(ModelPicker, {
-                models,
-                selected: draft.vision,
-                onSelect: onSelectVisionModel,
-                onRefresh: onRefreshModels,
-                emptyLabel: '跟随默认模型',
-                emptySub: `默认：${chatLabel}`,
-              }),
-            ),
-            h('div', { className: 'qqb-form-group' },
-              h('h4', { className: 'qqb-subhead' }, '联网搜索模型'),
-              h(ModelPicker, {
-                models,
-                selected: draft.search,
-                onSelect: onSelectSearchModel,
-                onRefresh: onRefreshModels,
-                emptyLabel: '跟随默认模型',
-                emptySub: `默认：${chatLabel}`,
-              }),
-              h('p', { className: 'qqb-hint' }, 'QQ 机器人的独立模型；留空跟随默认模型。'),
-            ),
           )
+          : null,
+        tab === 'abilities'
+          ? h(AbilitySettings, {
+            draft,
+            update,
+            models,
+            onSelectSearchModel,
+            onSelectVisionModel,
+            onRefreshModels,
+            connected,
+          })
           : null,
         tab === 'persona'
           ? h('div', { className: 'qqb-form-group' },
@@ -2086,6 +2256,7 @@ window.__ModuleLoader__.load({
           onRefreshGroups: loadGroups,
           contacts,
           requestCount: requests.length,
+          connected: Boolean(status && status.connected),
         }),
 
         tab === 'groups'
@@ -2174,15 +2345,14 @@ window.__ModuleLoader__.load({
             })),
         ) : null,
 
-        tab === 'content' ? h(React.Fragment, null,
-        h(DiaryPanel, {
+        tab === 'content' ? h(DiaryPanel, {
           diary,
           onWrite: writeDiaryNow,
           onRefresh: () => { void load(true); },
           busy: busy === 'diary',
-        }),
+        }) : null,
 
-        h(StickerPanel, {
+        tab === 'abilities' ? h(StickerPanel, {
           stickers,
           onOpen: () => setStickerManagerOpen(true),
           onSync: syncStickers,
@@ -2190,8 +2360,7 @@ window.__ModuleLoader__.load({
           onAutoTag: autoTagStickers,
           autoTagging: busy === 'autotag',
           busy: busy === 'stickers',
-        }),
-        ) : null,
+        }) : null,
 
         h(StickerManager, {
           open: stickerManagerOpen,
@@ -2425,6 +2594,19 @@ window.__ModuleLoader__.load({
       .qqb-form-groups { display:flex; flex-direction:column; gap:16px; }
       .qqb-form-group { display:flex; flex-direction:column; gap:8px; }
       .qqb-form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px 14px; }
+      .qqb-capability { padding:14px; border:1px solid var(--dsw-alias-border-l1); border-radius:12px; background:var(--dsw-alias-bg-layer-2); }
+      .qqb-form-group-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+      .qqb-capability-title { display:flex; flex-direction:column; gap:2px; min-width:0; }
+      .qqb-capability-title .qqb-subhead { margin:0; }
+      .qqb-image-tester { display:flex; flex-direction:column; gap:10px; margin-top:6px; padding-top:10px; border-top:1px dashed var(--dsw-alias-border-l1); }
+      .qqb-image-searchbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .qqb-image-sendbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .qqb-image-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
+      .qqb-image-card { display:flex; flex-direction:column; gap:6px; padding:8px; border:1px solid var(--dsw-alias-border-l1); border-radius:10px; background:var(--dsw-alias-bg-layer-1); }
+      .qqb-image-thumb { width:100%; height:120px; object-fit:cover; border-radius:8px; background:var(--dsw-alias-bg-layer-2); }
+      .qqb-image-thumb-empty { display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--dsw-alias-label-secondary); }
+      .qqb-image-title { font-size:12px; line-height:1.5; color:var(--dsw-alias-label-primary); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+      .qqb-image-meta { font-size:10px; color:var(--dsw-alias-label-secondary); font-family:ui-monospace,Consolas,monospace; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
       .qqb-form-row { display:flex; flex-direction:column; gap:4px; min-width:0; }
       .qqb-form-label { font-size:12px; color:var(--dsw-alias-label-secondary); line-height:1.45; }
       .qqb-field-hint { display:block; font-size:11px; opacity:.78; margin-top:2px; }

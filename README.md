@@ -47,13 +47,14 @@
 - **人设预设**：多套独立人设板，选择即载入；每个预设拥有独立的联系人/群记忆、自我认知和聊天上下文
 - **联网搜索**：可单独配置搜索模型，聊天模型通过 `qq_web_search` 调用独立搜索会话
 - **图片解析**：可单独配置视觉模型；聊天模型纯文本也能通过 `qq_describe_image` 看图
+- **图片搜索**：`qq_image_search` 按关键词搜图并直接把图片发到 QQ；设置页「能力」里有搜索/发送测试区
 - **表情包**：自动收藏、同步 QQ 收藏、按语境发送、概率发表情、批量删除
 - **日记**：以角色口吻写私人日记，默认保存到 `<dataDir>/diary`
 - **群管理**：警告 → 禁言 → 踢人的严格策略，支持自动 @ 主人求助
 - **好友/群请求**：自动或手动同意、拒绝或忽略；设置页请求卡片按键后会就地显示结果/失败原因，支持「全部忽略」与 `#qq approve/reject/ignore`
 - **主动发言**：群聊和私聊都可主动开口；私聊只发给白名单联系人
 - **连续会话**：一个私聊/群聊通道对应一个长期 agent，按轮次自动重建，避免上下文无限增长
-- **设置页面**：DSH Web GUI 内的一级设置页，实时状态、模型选择、人设、记忆、表情包、日记、连接参数
+- **设置页面**：DSH Web GUI 内的一级设置页，实时状态、模型、能力、人设、记忆、日记、连接参数
 
 ## English overview
 
@@ -80,7 +81,7 @@ DSH Host 插件
   │    ├─ 工具白名单：web / 只读文件 / QQ 工具
   │    └─ 回合结束 → 取最终文本 → 分段发送
   ├─ 记忆引擎：联系人/群 recent + LLM 摘要压缩 + 人设演化
-  └─ HTTP API：/qq-bot/status /overview /settings /memory /models /groups ...
+  └─ HTTP API：/qq-bot/status /overview /settings /memory /models /groups /images ...
   ↕ 同源 fetch
 设置页（React，注册到 settings.section）
 ```
@@ -136,17 +137,26 @@ dsh plugin --profile web add @your-scope/dsh-qq-bot
 打开 **设置 → QQ 聊天**。设置页左侧分为：
 
 ```text
-模型 | 人设 | 对话 | 群聊 | 记忆 | 安全 | 内容 | 连接
+模型 | 能力 | 人设 | 对话 | 群聊 | 记忆 | 安全 | 内容 | 连接
 ```
 
 ### 模型
 
 - 群聊模型 + 思考强度
 - 私聊模型 + 思考强度
-- 图片解析模型
-- 联网搜索模型
+- 模型参数（最大输出 token）
 
 模型留空时跟随默认模型。每个通道有自己的 agent 会话，不会串上下文。
+
+### 能力
+
+- **联网搜索**：开关、搜索模型、结果条数；通过 `qq_web_search` 调用独立搜索会话
+- **图片解析**：开关、视觉模型、自动识别新收藏的表情、单张上限；通过 `qq_describe_image` 看图
+- **图片搜索**：开关、候选数量、单张上限、严格安全过滤、发图冷却、图片缓存目录；通过 `qq_image_search` 搜图并直接发到当前 QQ
+- **图片搜索测试区**：输入关键词搜一张预览，填群号 / QQ 号后点「发送」，用来验证搜索和 OneBot 发图链路
+- **表情包**：开关、自动收藏、同步 QQ 收藏、冷却、自动发表情概率、目录；表情库在下方「表情库」卡片里同步 / 打标签 / 批量删除
+
+图片搜索默认使用 Bing 图片搜索，不需要 API key；发送时把图片转成 base64 经 OneBot 发出，同时缓存到 `<dataDir>/images`，方便复查或再次发送。下载失败会自动换下一张候选，并拒绝访问内网 / 本机地址。
 
 ### 人设
 
@@ -190,7 +200,6 @@ dsh plugin --profile web add @your-scope/dsh-qq-bot
 ### 内容
 
 - 日记目录、自动续写间隔、素材来源
-- 表情包目录、自动收藏、同步 QQ 收藏、冷却、自动发表情概率
 
 ### 连接
 
@@ -208,6 +217,7 @@ dsh plugin --profile web add @your-scope/dsh-qq-bot
 ├── settings.json   # 配置（可能含 access token，注意不要泄露）
 ├── state.json      # 联系人、群、消息、记忆、表情包元数据
 ├── diary/          # 日记
+├── images/         # 图片搜索缓存
 └── stickers/       # 表情包文件
 ```
 
@@ -218,6 +228,7 @@ dsh plugin --profile web add @your-scope/dsh-qq-bot
 - `settings.json`
 - `state.json`
 - `diary/`
+- `images/`
 - `stickers/`
 - `node_modules/`
 - 日志和本地测试文件
@@ -242,6 +253,7 @@ icon.svg           设置页图标
 - `buildSystemPrompt` / `buildTurnPrompt`：提示词
 - `ensureAgent` / `chatAgents`：私聊/群聊双 agent
 - `splitReply` / `sendReply`：连续输出与发送
+- `searchImages` / `downloadImage` / `sendImageToJob`：图片搜索、缓存与发图
 - `compressContact` / `compressGroup` / `evolvePersona`：记忆与人设演化
 - `registerRoutes`：设置页 HTTP API
 
@@ -262,6 +274,7 @@ node --check client.js
 | 机器人莫名私聊人 | 「对话 → 主动私聊白名单」是否为空；同时检查 `proactive.enabled` |
 | 回复“没有可用模型” | 在 DSH 配置默认模型，或在私聊/群聊模型选择器里选一个模型 |
 | 搜索报缺少 API key | 搜索模型选有搜索凭据的 provider，或在 DSH 配置 Exa/Perplexity |
+| 搜图或发图失败 | 图片站点是否可访问、图片是否超过大小上限、OneBot 是否能发图；到设置页「能力 → 图片搜索」测试区复现 |
 | 群列表读取失败 | OneBot 是否在线；设置页会回退到本地已知群 |
 
 ## 许可

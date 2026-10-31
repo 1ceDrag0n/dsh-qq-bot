@@ -57,6 +57,14 @@
     "enabled": true,
     "dir": ""
   },
+  "imagesearch": {
+    "enabled": true,
+    "maxResults": 8,
+    "maxBytes": 3000000,
+    "safeSearch": true,
+    "cooldownSeconds": 10,
+    "dir": ""
+  },
   "advanced": {
     "dataDir": "",
     "agentPreset": "qq-bot",
